@@ -1,9 +1,11 @@
 (ns clj4l.core
+  (:use [osc])
   (:import (org.jfugue MovableDoNotation Pattern Note MusicStringParser ParserListener
                        IntervalNotation MusicStringParser MidiRenderer)
-           (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)
-           (java.net InetAddress)
-           (com.illposed.osc OSCPort OSCPortOut OSCPortIn OSCBundle OSCMessage OSCListener)))
+           (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)))
+
+(defn create-client [] (osc-client "127.0.0.1" 5432))
+(defn create-query-client [] (osc-client "127.0.0.1" 6543))
 
 (defn sequence-for-pattern [pattern]
   (let [parser (MusicStringParser.)
@@ -14,36 +16,34 @@
 (defn output-short-message [m type]
   (println type ": " (.getData1 m) " " (.getData2 m) " chan: " (.getChannel m)))
 
-; Use OSCBundle since OSCMessage alone has issues.
-(defn decode-short-message [m osc-out]
+(defn decode-short-message [m client]
   (condp = (.getCommand m)
-      (ShortMessage/NOTE_ON) (do (.send osc-out
-                                        (doto  (OSCBundle.)
-                                          (.addPacket  (OSCMessage. "/clj4l/track/1/note"
-                                                                    (object-array [(.getData1 m) (.getData2 m)])))))
+      (ShortMessage/NOTE_ON) (do (osc-send-bundle client (osc-bundle OSC-TIMETAG-NOW
+                                                                     [(osc-msg-infer-types "/clj4l/track/1/note" (.getData1 m) (.getData2 m))]))
                                  (output-short-message m "noteon"))
-      (ShortMessage/NOTE_OFF) (do (.send osc-out
-                                         (doto (OSCBundle.)
-                                           (.addPacket (OSCMessage. "/clj4l/track/1/note"
-                                                                    (object-array [(.getData1 m) 0])))))
+      (ShortMessage/NOTE_OFF) (do (osc-send-bundle client (osc-bundle OSC-TIMETAG-NOW
+                                                                      [(osc-msg-infer-types "/clj4l/track/1/note" (.getData1 m) 0)]))
                                   (output-short-message m "noteoff"))
-;      (ShortMessage/CONTROL_CHANGE) (output-short-message m "cc") (output-short-message m "unknown"))
-  ))
+      (ShortMessage/CONTROL_CHANGE) nil ; (output-short-message m "cc")
+      (output-short-message m "unknown")))
 
 (defn music-string-to-noteout
   ([music-string]
-     (with-open [osc-out (OSCPortOut. (java.net.InetAddress/getLocalHost) 5432)]
-       (let [sequence (sequence-for-pattern (Pattern. music-string))
-             sequencer (MidiSystem/getSequencer false)]
+     (let [client (create-client)
+           sequence (sequence-for-pattern (Pattern. music-string))
+           sequencer (MidiSystem/getSequencer false)]
+       (try
          (.open sequencer)
          (.. sequencer (getTransmitter)
              (setReceiver (reify Receiver
                                  (send [this midi-message timestamp]
                                        (when (instance? ShortMessage midi-message)
-                                         (decode-short-message midi-message osc-out))))))
+                                         (decode-short-message midi-message client))))))
          (doto sequencer (.setSequence sequence) (.start))
          (while (.isRunning sequencer) (Thread/sleep 20))
-         (.close sequencer))))
+         (.close sequencer)
+         (finally
+          (osc-close client true)))))
   ([music-string root-note-num]
      (music-string-to-noteout (.. (org.jfugue.MovableDoNotation. music-string)
                                (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
@@ -92,19 +92,20 @@ call done
 
 (defn music-string-to-clip
   ([music-string]
-      (let [notes (music-string-to-m4l music-string)
-            bundle (OSCBundle.)]
-        (doto bundle
-          (.addPacket (OSCMessage. "/clj4l/track/1/path"
-                                   (object-array ["path" "live_set" "tracks" 0 "clip_slots" 0 "clip"])))
-          (.addPacket (OSCMessage. "/clj4l/track/1/object" (object-array ["call" "select_all_notes"])))
-          (.addPacket (OSCMessage. "/clj4l/track/1/object" (object-array ["call" "replace_selected_notes"])))
-          (.addPacket (OSCMessage. "/clj4l/track/1/object" (object-array ["call" "notes" (count notes)]))))
-        (doseq [n notes]
-          (.addPacket bundle (OSCMessage. "/clj4l/track/1/object" (object-array (apply conj ["call" "note"] n)))))
-        (.addPacket bundle (OSCMessage. "/clj4l/track/1/object" (object-array ["call" "done"])))
-        (with-open [osc-out (OSCPortOut. (java.net.InetAddress/getLocalHost) 5432)]
-          (.send osc-out bundle))))
+      (let [client (create-client)
+            notes (music-string-to-m4l music-string)]
+        (try
+          (in-osc-bundle client OSC-TIMETAG-NOW
+                         (osc-send client  "/clj4l/track/1/path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip")
+                         (osc-send client  "/clj4l/track/1/object" "call" "select_all_notes")
+                         (osc-send client  "/clj4l/track/1/object"  "call" "replace_selected_notes")
+                         (osc-send client "/clj4l/track/1/object"  "call" "notes" (count notes))
+                         (doseq [n notes]
+                           (apply osc-send client "/clj4l/track/1/object" "call" "note" n))
+                         (osc-send client "/clj4l/track/1/object" "call" "done"))
+          (Thread/sleep 500)
+          (finally
+           (osc-close client true)))))
   ([music-string root-note-num]
      (music-string-to-clip (.. (org.jfugue.MovableDoNotation. music-string)
                                (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
@@ -112,20 +113,23 @@ call done
 ; (query [["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "getinfo"]])
 ; (query [["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"]])
 (defn query [cmds]
-  (with-open [osc-out (OSCPortOut. (java.net.InetAddress/getLocalHost) 6543)]
-    (let [ bundle (OSCBundle.)]
-      (doseq [cmd cmds]
-        (.addPacket bundle (OSCMessage. (str "/clj4l/query/" (first cmd)) (object-array (next cmd)))))
-      (.send osc-out bundle))))
+  (let [client (create-query-client)]
+    (try
+      (in-osc-bundle client OSC-TIMETAG-NOW
+                     (doseq [cmd cmds]
+                       (apply osc-send client (str "/clj4l/query/" (first cmd)) (next cmd))))
+      (Thread/sleep 500)
+      (finally
+       (osc-close client true)))))
 
 (alter-var-root #'*out* (constantly *out*))
-(defonce *recv* (OSCPortIn. 3456))
+;(defonce *recv* (OSCPortIn. 3456))
 
-(defn receive []
-  (doto *recv*
-    (.stopListening)
-    (.addListener "/clj4l/result" (reify OSCListener
-                                         (acceptMessage [this time msg]
-                                                        (dorun (map println  (.getArguments msg))))))
-    (.startListening)))
+(comment (defn receive []
+           (doto *recv*
+             (.stopListening)
+             (.addListener "/clj4l/result" (reify OSCListener
+                                                  (acceptMessage [this time msg]
+                                                                 (dorun (map println  (.getArguments msg))))))
+             (.startListening))))
 
