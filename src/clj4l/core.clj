@@ -6,6 +6,7 @@
 
 (defn create-client [] (osc-client "127.0.0.1" 5432))
 (defn create-query-client [] (osc-client "127.0.0.1" 6543))
+(defn create-result-server [] (osc-server 3456))
 
 (defn sequence-for-pattern [pattern]
   (let [parser (MusicStringParser.)
@@ -110,26 +111,29 @@ call done
      (music-string-to-clip (.. (org.jfugue.MovableDoNotation. music-string)
                                (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
 
-; (query [["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "getinfo"]])
-; (query [["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"]])
+(alter-var-root #'*out* (constantly *out*))
+
+(comment (query [["begin"]
+                 ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "getinfo"]
+                 ["end"]]))
+(comment (query [["begin"]
+                 ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"]
+                 ["end"]]))
 (defn query [cmds]
-  (let [client (create-query-client)]
+  (let [client (create-query-client)
+        server (create-result-server)
+        m (atom {})]
     (try
+      (osc-handle server "/clj4l/result" (fn [msg] (let [key (keyword (first (:args msg)))] (swap! m assoc key (conj (get @m key []) (:args msg))))))
       (in-osc-bundle client OSC-TIMETAG-NOW
                      (doseq [cmd cmds]
                        (apply osc-send client (str "/clj4l/query/" (first cmd)) (next cmd))))
-      (Thread/sleep 500)
+      (when (osc-recv server "/clj4l/result/end" 1000)
+        (println "m: " @m)
+        )
       (finally
-       (osc-close client true)))))
+       (osc-close client true)
+       (osc-close server true)))))
 
-(alter-var-root #'*out* (constantly *out*))
-;(defonce *recv* (OSCPortIn. 3456))
-
-(comment (defn receive []
-           (doto *recv*
-             (.stopListening)
-             (.addListener "/clj4l/result" (reify OSCListener
-                                                  (acceptMessage [this time msg]
-                                                                 (dorun (map println  (.getArguments msg))))))
-             (.startListening))))
+(query [["begin"] ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"] ["end"]])
 
