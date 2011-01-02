@@ -1,12 +1,21 @@
 (ns clj4l.core
+  (:require [clojure.string :as str])
   (:use [osc])
   (:import (org.jfugue MovableDoNotation Pattern Note MusicStringParser ParserListener
                        IntervalNotation MusicStringParser MidiRenderer)
            (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)))
 
 (defn create-client [] (osc-client "127.0.0.1" 5432))
-(defn create-query-client [] (osc-client "127.0.0.1" 6543))
-(defn create-result-server [] (osc-server 3456))
+
+(defonce *query-ctx* (let [result (atom {})
+                           result-server (osc-server 3456)]
+                       (osc-handle result-server "/clj4l/result/begin" (fn [msg] (reset! result {})))
+                       (osc-handle result-server "/clj4l/result"
+                                   (fn [msg]
+                                     (let [key (keyword (first (:args msg)))
+                                           value (next (:args msg))]
+                                       (swap! result assoc key (conj (get @result key []) (if (= (count value) 1) (first value) value))))))
+                       {:query-client (osc-client "127.0.0.1" 6543) :result-server result-server :result result }))
 
 (defn sequence-for-pattern [pattern]
   (let [parser (MusicStringParser.)
@@ -119,21 +128,27 @@ call done
 (comment (query [["begin"]
                  ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"]
                  ["end"]]))
-(defn query [cmds]
-  (let [client (create-query-client)
-        server (create-result-server)
-        m (atom {})]
-    (try
-      (osc-handle server "/clj4l/result" (fn [msg] (let [key (keyword (first (:args msg)))] (swap! m assoc key (conj (get @m key []) (:args msg))))))
-      (in-osc-bundle client OSC-TIMETAG-NOW
-                     (doseq [cmd cmds]
-                       (apply osc-send client (str "/clj4l/query/" (first cmd)) (next cmd))))
-      (when (osc-recv server "/clj4l/result/end" 1000)
-        (println "m: " @m)
-        )
-      (finally
-       (osc-close client true)
-       (osc-close server true)))))
+(comment (query [["begin"]
+                 ["path" "path" "live_set"] ["object" "get" "tracks"]
+                 ["end"]]))
 
-(query [["begin"] ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"] ["end"]])
+;(query [["begin"] ["path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip"] ["object" "call" "select_all_notes"] ["object" "call" "get_selected_notes"] ["end"]])
 
+(defmacro with-query-ctx [query-ctx & body]
+  `(let [ctx# ~query-ctx
+         ~'query-path #(apply osc-send (:query-client ctx#) "/clj4l/query/path" "path" (str/split % #"\s+"))
+         ~'query-object #(apply osc-send (:query-client ctx#) "/clj4l/query/object" (str/split % #"\s+"))]
+     (in-osc-bundle (:query-client ctx#) OSC-TIMETAG-NOW
+                    (osc-send (:query-client ctx#) "/clj4l/query/begin")
+                    ~@body
+                    (osc-send (:query-client ctx#) "/clj4l/query/end")                   )
+     (if (osc-recv (:result-server ctx#) "/clj4l/result/end" 1000)
+       @(:result ctx#)
+       (throw (Exception. "Timed out waiting for query result.")))))
+
+(def m (with-query-ctx *query-ctx*
+                    (query-path "live_set tracks 0 clip_slots 0 clip")
+                    (query-object  "call select_all_notes")
+                    (query-object  "call get_selected_notes")))
+
+(println m)
