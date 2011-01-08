@@ -5,6 +5,8 @@
                        IntervalNotation MusicStringParser MidiRenderer)
            (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)))
 
+; TODO: query: nil, capture type
+
 (defn create-client [] (osc-client "127.0.0.1" 5432))
 
 (defonce *query-ctx* (let [result (atom {})
@@ -142,6 +144,7 @@ call done
          (println m))
 
 (defn query [ctx & args]
+  (println "query: " args)
   (in-osc-bundle (:query-client ctx) OSC-TIMETAG-NOW
                     (osc-send (:query-client ctx) "/clj4l/query/begin")
                     (doseq [cmd (map #(str/split % #"\s+") args)]
@@ -158,17 +161,26 @@ call done
 ;{:info [(id 3) (type Track) (children clip_slots ClipSlot) (children devices Device) (child canonical_parent Song) (child mixer_device MixerDevice) (child view View) (property arm bool) (property can_be_armed bool) (property color int) (property current_input_routing unicode) (property current_input_sub_routing unicode) (property current_monitoring_state int) (property current_output_routing unicode) (property current_output_sub_routing unicode) (property fired_slot_index int) (property has_audio_input bool) (property has_audio_output bool) (property has_midi_input bool) (property has_midi_output bool) (property input_meter_level float) (property input_routings tuple) (property input_sub_routings tuple) (property is_foldable bool) (property is_part_of_selection bool) (property is_visible bool) (property mute bool) (property name unicode) (property output_meter_level float) (property output_routings tuple) (property output_sub_routings tuple) (property playing_slot_index int) (property solo bool) (function jump_in_running_session_clip) (function stop_all_clips) done], :name [2-MIDI]}
 
 ; {:input_routings [("All" "Ins" "Automap" "MIDI" "Computer" "Keyboard" "from" "MaxMSP" 1 "from" "MaxMSP" 2 "1-Sylenth1" "No" "Input")], :fired_slot_index [-1], :arm [0], :is_visible [1], :output_meter_level [0.0], :solo [0], :current_input_routing ["Ext: All Ins"], :input_sub_routings [("All" "Channels" "Ch." 1 "Ch." 2 "Ch." 3 "Ch." 4 "Ch." 5 "Ch." 6 "Ch." 7 "Ch." 8 "Ch." 9 "Ch." 10 "Ch." 11 "Ch." 12 "Ch." 13 "Ch." 14 "Ch." 15 "Ch." 16)], :name ["2-MIDI"], :current_monitoring_state [1], :current_output_routing ["None"], :can_be_armed [1], :color [0], :has_audio_output [0], :input_meter_level [0.0], :output_routings [("Automap" "MIDI" "Numerology3" "1-Sylenth1" "No" "Output")], :playing_slot_index [-1], :has_midi_output [1], :is_foldable [0], :is_part_of_selection [0], :has_audio_input [0], :has_midi_input [1], :mute [0]}
+
+(declare query-info)
+
+(defn query-info-ids [ids ctx]
+  (doall (map #(query-info {:id %1} ctx) (filter (complement string?) ids)))) ; (id 3 id 4)
+
+(defn query-info-category [m category info ctx]
+  ; Do not specify child as category
+  ; [(id 3) (children clip_slots  ClipSlot) (property name unicode) (child canonical_parent Song)
+  (let [specs (filter #(= category (first %)) info) 
+          result (apply query ctx (map #(apply str %&) (repeat "get ") (map #(second %) specs)))]
+    (reduce (if (= category "property") #(assoc %1 %2 (-> %2 result first)) #(assoc %1 %2 (-> %2 result first (query-info-ids ctx))))
+            m (map #(-> % second keyword) specs))))
+
+(defn query-info [m ctx]
+  (let [info (:info (query ctx (str "id " (:id m)) "getinfo"))]
+    (reduce #(query-info-category  %1 %2 info ctx) m ["property" "children"])))
+
 (defn query-tracks [ctx]
-; {:tracks [(id 3 id 4)], :id [2]}
-  (doseq [track-id (filter (complement string?) (first (:tracks (query ctx "path live_set" "get tracks"))))]
-    (println "track-id: " track-id)
-    (let [prop-specs (filter #(= "property" (first %)) (:info (query ctx (str "id " track-id) "getinfo")))
-          prop-result (apply query ctx (map #(apply str %&) (repeat "get ") (map #(second %) prop-specs)))
-          props (reduce #(assoc %1 %2 (-> %2 prop-result first)) {:id track-id} (map #(-> % second keyword) prop-specs))]
-;      (prn prop-specs)
-      (prn props)
-      )
-    ))
+  (prn (query-info-ids (first (:tracks (query ctx "path live_set" "get tracks"))) ctx)))
 
 (query-tracks *query-ctx*)
 
