@@ -1,11 +1,13 @@
 (ns clj4l.core
   (:require [clojure.string :as str])
+  (:use [clojure.contrib.seq :only (find-first)])
+  (:use [clojure.contrib.pprint :as pp])
   (:use [osc])
   (:import (org.jfugue MovableDoNotation Pattern Note MusicStringParser ParserListener
                        IntervalNotation MusicStringParser MidiRenderer)
            (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)))
 
-; TODO: query: nil, capture type
+; TODO: 
 
 (defn create-client [] (osc-client "127.0.0.1" 5432))
 
@@ -165,22 +167,43 @@ call done
 (declare query-info)
 
 (defn query-info-ids [ids ctx]
+  (println "query-info-ids: " ids)
   (doall (map #(query-info {:id %1} ctx) (filter (complement string?) ids)))) ; (id 3 id 4)
 
 (defn query-info-category [m category info ctx]
-  ; Do not specify child as category
+  (println "query-info-category: " category)
   ; [(id 3) (children clip_slots  ClipSlot) (property name unicode) (child canonical_parent Song)
-  (let [specs (filter #(= category (first %)) info) 
-          result (apply query ctx (map #(apply str %&) (repeat "get ") (map #(second %) specs)))]
-    (reduce (if (= category "property") #(assoc %1 %2 (-> %2 result first)) #(assoc %1 %2 (-> %2 result first (query-info-ids ctx))))
-            m (map #(-> % second keyword) specs))))
+  (if-let [specs (seq (filter #(= category (first %)) info))]
+    ; {:canonical_parent [("id" 17)]}
+    (let [result (apply query ctx (map #(apply str %&) (repeat "get ") (map #(second %) specs)))]
+      (reduce (cond
+               (= category "children") (fn [m attribute]
+                                         (if (find-first #(= [(:type m) attribute] %) [["Song" :visited_tracks] ["Scene" :clip_slots]])
+                                           (assoc m attribute (-> attribute result first))
+                                           (do
+                                             (println "query-info-category: attribute: " attribute ": " (-> attribute result))
+                                             (assoc m attribute (-> attribute result first (query-info-ids ctx))))))
+               (= category "child") (fn [m attribute]
+                                      (println "query-info-category: attribute: " attribute ": " (-> attribute result))
+                                      (if (find-first #(= [(:type m) attribute] %) [["ClipSlot" :clip]])
+                                        (assoc m attribute (query-info {:id (-> attribute result first second)} ctx))
+                                        (assoc m attribute (-> attribute result first))))
+               :else #(assoc %1 %2 (-> %2 result first)))
+              m (map #(-> % second keyword) specs)))
+    m))
 
 (defn query-info [m ctx]
   (let [info (:info (query ctx (str "id " (:id m)) "getinfo"))]
-    (reduce #(query-info-category  %1 %2 info ctx) m ["property" "children"])))
+    (reduce #(query-info-category  %1 %2 info ctx)
+            (assoc m :type (second (find-first #(= (first %) "type") info)))
+            ["property" "children" "child"])))
 
 (defn query-tracks [ctx]
-  (prn (query-info-ids (first (:tracks (query ctx "path live_set" "get tracks"))) ctx)))
+  (query-info-ids (first (:tracks (query ctx "path live_set" "get tracks"))) ctx))
 
-(query-tracks *query-ctx*)
+(defn query-song [ctx]
+  (query-info {:id (-> (query ctx "path live_set") :id first)} ctx))
 
+;(def t (query-tracks *query-ctx*))
+(def s (query-song *query-ctx*))
+;(pp/pprint (-> s :tracks (nth 0) :clip_slots (nth 0)))
