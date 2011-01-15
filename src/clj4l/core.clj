@@ -9,7 +9,9 @@
 
 ; TODO: 
 
-(defn create-client [] (osc-client "127.0.0.1" 5432))
+(alter-var-root #'*out* (constantly *out*))
+
+(defonce *control-client* (osc-client "127.0.0.1" 5432))
 
 (defonce *query-ctx* (let [result (atom {})
                            result-server (osc-server 3456)]
@@ -33,34 +35,35 @@
 (defn decode-short-message [m client]
   (condp = (.getCommand m)
       (ShortMessage/NOTE_ON) (do (osc-send-bundle client (osc-bundle OSC-TIMETAG-NOW
-                                                                     [(osc-msg-infer-types "/clj4l/track/1/note" (.getData1 m) (.getData2 m))]))
+                                                                     [(osc-msg-infer-types "/clj4l/control/note" (.getData1 m) (.getData2 m))]))
                                  (output-short-message m "noteon"))
       (ShortMessage/NOTE_OFF) (do (osc-send-bundle client (osc-bundle OSC-TIMETAG-NOW
-                                                                      [(osc-msg-infer-types "/clj4l/track/1/note" (.getData1 m) 0)]))
+                                                                      [(osc-msg-infer-types "/clj4l/control/note" (.getData1 m) 0)]))
                                   (output-short-message m "noteoff"))
       (ShortMessage/CONTROL_CHANGE) nil ; (output-short-message m "cc")
       (output-short-message m "unknown")))
 
 (defn music-string-to-noteout
   ([music-string]
-     (let [client (create-client)
+     (let [client *control-client*
            sequence (sequence-for-pattern (Pattern. music-string))
            sequencer (MidiSystem/getSequencer false)]
-       (try
-         (.open sequencer)
-         (.. sequencer (getTransmitter)
-             (setReceiver (reify Receiver
-                                 (send [this midi-message timestamp]
-                                       (when (instance? ShortMessage midi-message)
-                                         (decode-short-message midi-message client))))))
-         (doto sequencer (.setSequence sequence) (.start))
-         (while (.isRunning sequencer) (Thread/sleep 20))
-         (.close sequencer)
-         (finally
-          (osc-close client true)))))
+       (.open sequencer)
+       (.. sequencer (getTransmitter)
+           (setReceiver (reify Receiver
+                               (send [this midi-message timestamp]
+                                     (when (instance? ShortMessage midi-message)
+                                       (decode-short-message midi-message client))))))
+       (doto sequencer (.setSequence sequence) (.start))
+       (while (.isRunning sequencer) (Thread/sleep 20))
+       (.close sequencer)))
   ([music-string root-note-num]
      (music-string-to-noteout (.. (org.jfugue.MovableDoNotation. music-string)
-                               (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
+                                  (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
+
+(comment
+  (music-string-to-noteout "1 3 5" 60)
+  )
 
 (defn add-note [note note-time notes]
           (alter notes conj [(int (.getValue note))  (float (/ note-time 120.0))
@@ -104,46 +107,37 @@ call done
       (.parse (Pattern. music-string)))
     @notes))
 
+(defn control [client & args]
+  (in-osc-bundle client OSC-TIMETAG-NOW
+                 (doseq [cmd (map #(str/split % #"\s+") args)]
+                   (apply osc-send client (str "/clj4l/control/" (if (= (first cmd) "path") "path" "object")) cmd))))
+
 (defn music-string-to-clip
   ([music-string]
-      (let [client (create-client)
+      (let [client *control-client*
             notes (music-string-to-m4l music-string)]
-        (try
-          (in-osc-bundle client OSC-TIMETAG-NOW
-                         (osc-send client  "/clj4l/track/1/path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip")
-                         (osc-send client  "/clj4l/track/1/object" "call" "select_all_notes")
-                         (osc-send client  "/clj4l/track/1/object"  "call" "replace_selected_notes")
-                         (osc-send client "/clj4l/track/1/object"  "call" "notes" (count notes))
-                         (doseq [n notes]
-                           (apply osc-send client "/clj4l/track/1/object" "call" "note" n))
-                         (osc-send client "/clj4l/track/1/object" "call" "done"))
-          (Thread/sleep 500)
-          (finally
-           (osc-close client true)))))
+        (apply control client (concat ["path live_set tracks 0 clip_slots 0 clip" "call select_all_notes"
+                                 "call replace_selected_notes" (str "call notes " (count notes))]
+                                      (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))
+        (comment (in-osc-bundle client OSC-TIMETAG-NOW
+                                (osc-send client  "/clj4l/control/path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip")
+                                (osc-send client  "/clj4l/control/object" "call" "select_all_notes")
+                                (osc-send client  "/clj4l/control/object"  "call" "replace_selected_notes")
+                                (osc-send client "/clj4l/control/object"  "call" "notes" (count notes))
+                                (doseq [n notes]
+                                  (apply osc-send client "/clj4l/control/object" "call" "note" n))
+                                (osc-send client "/clj4l/control/object" "call" "done")))
+        (Thread/sleep 500)))
   ([music-string root-note-num]
      (music-string-to-clip (.. (org.jfugue.MovableDoNotation. music-string)
                                (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
 
-(alter-var-root #'*out* (constantly *out*))
 
-(comment (defmacro with-query-ctx [query-ctx & body]
-           `(let [ctx# ~query-ctx
-                  ~'query-path #(apply osc-send (:query-client ctx#) "/clj4l/query/path" "path" (str/split % #"\s+"))
-                  ~'query-object #(apply osc-send (:query-client ctx#) "/clj4l/query/object" (str/split % #"\s+"))]
-              (in-osc-bundle (:query-client ctx#) OSC-TIMETAG-NOW
-                             (osc-send (:query-client ctx#) "/clj4l/query/begin")
-                             ~@body
-                             (osc-send (:query-client ctx#) "/clj4l/query/end")                   )
-              (if (osc-recv (:result-server ctx#) "/clj4l/result/end" 1000)
-                @(:result ctx#)
-                (throw (Exception. "Timed out waiting for query result.")))))
+(comment
 
-         (def m (with-query-ctx *query-ctx*
-                  (query-path "live_set tracks 0 clip_slots 0 clip")
-                  (query-object  "call select_all_notes")
-                  (query-object  "call get_selected_notes")))
+  (music-string-to-clip "1 1 4 8" 60)
 
-         (println m))
+  )
 
 (defn query [ctx & args]
   (println "query: " args)
@@ -205,5 +199,5 @@ call done
   (query-info {:id (-> (query ctx "path live_set") :id first)} ctx))
 
 ;(def t (query-tracks *query-ctx*))
-(def s (query-song *query-ctx*))
+;(def s (query-song *query-ctx*))
 ;(pp/pprint (-> s :tracks (nth 0) :clip_slots (nth 0)))
