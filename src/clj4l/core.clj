@@ -7,7 +7,7 @@
                        IntervalNotation MusicStringParser MidiRenderer)
            (javax.sound.midi Sequencer Sequence Transmitter Receiver ShortMessage MidiSystem)))
 
-; TODO: 
+; TODO: music-string: sharps/flats
 
 (alter-var-root #'*out* (constantly *out*))
 
@@ -66,7 +66,7 @@
   )
 
 (defn add-note [note note-time notes]
-          (alter notes conj [(int (.getValue note))  (float (/ note-time 120.0))
+          (alter notes conj [(int (.getValue note))  (float (/ note-time 30.0))
                              (float (.getDecimalDuration note)) (int (.getAttackVelocity note)) 0]))
 
 (comment
@@ -113,30 +113,71 @@ call done
                    (apply osc-send client (str "/clj4l/control/" (if (= (first cmd) "path") "path" "object")) cmd))))
 
 (defn music-string-to-clip
-  ([music-string]
+  ([music-string track clip-slot]
       (let [client *control-client*
             notes (music-string-to-m4l music-string)]
-        (apply control client (concat ["path live_set tracks 0 clip_slots 0 clip" "call select_all_notes"
-                                 "call replace_selected_notes" (str "call notes " (count notes))]
-                                      (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))
-        (comment (in-osc-bundle client OSC-TIMETAG-NOW
-                                (osc-send client  "/clj4l/control/path" "path" "live_set" "tracks" 0 "clip_slots" 0 "clip")
-                                (osc-send client  "/clj4l/control/object" "call" "select_all_notes")
-                                (osc-send client  "/clj4l/control/object"  "call" "replace_selected_notes")
-                                (osc-send client "/clj4l/control/object"  "call" "notes" (count notes))
-                                (doseq [n notes]
-                                  (apply osc-send client "/clj4l/control/object" "call" "note" n))
-                                (osc-send client "/clj4l/control/object" "call" "done")))
-        (Thread/sleep 500)))
-  ([music-string root-note-num]
-     (music-string-to-clip (.. (org.jfugue.MovableDoNotation. music-string)
-                               (getPatternForRootNote (Note. root-note-num)) (getMusicString)))))
+        (apply control client (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
+                                       "call select_all_notes" "call replace_selected_notes"
+                                       (str "call notes " (count notes))]
+                                      (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))))
+  ([music-string root-note-num track clip-slot]
+     (music-string-to-clip (-> (org.jfugue.MovableDoNotation. music-string)
+                               (.getPatternForRootNote (Note. root-note-num)) (.getMusicString)) track clip-slot)))
 
 
 (comment
+  (music-string-to-clip "1 1 4 8" 60 1 0)
+  (music-string-to-clip "2 1 5 5" 60 1 0)
+  (music-string-to-clip "1 1 1 1" 36 1 0)
+  (music-string-to-clip "1i 3bi " 36 1 0)
+  )
 
-  (music-string-to-clip "1 1 4 8" 60)
+; pitch time duration velocity muted
+(defn notes-to-clip
+  ([notes track clip-slot]
+     (notes-to-clip notes track clip-slot *control-client*))
+  ([notes track clip-slot client]
+     (apply control client (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
+                                       "call select_all_notes" "call replace_selected_notes"
+                                       (str "call notes " (count notes))]
+                                      (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))))
 
+(def *base-note* [0 0.0 1.0 100 0])
+
+(defn alter-note [n key f & args]
+  (assoc n key (apply f (n key) args)))
+
+(defn take-beats [n coll]
+  (take-while #(< (% 1) n) coll))
+
+(defn within-beats [l u & args]
+  (let [len (if (odd? (count args)) (last args))
+        coll (concat [[l u]] (partition 2 args))]
+    (fn [n]
+      (let [v (if len (mod (n 1) len) (n 1))]
+        (some #(and (<= (first %) v) (<= v (last %))) coll)))))
+
+(defn alter-time [n-coll t-coll dur]
+  (map #(assoc %1 1 %2) (repeat n-coll) (mapcat #(map + t-coll (repeat (* dur %))) (iterate inc 0))))
+
+(comment
+  ; number sets, velocity/time snare ramp
+  (notes-to-clip (concat (take-beats 16.0  (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0])) 
+                         (take-beats 16.0 (iterate #(alter-note % 1 + 2.0) [39 1.0 0.25 100 0]))
+                         (take-beats 16.0 (iterate #(alter-note % 1 + 1.0) [46 0.5 0.25 100 0]))) 1 0)
+  (notes-to-clip (take-beats 16.0 (filter (within-beats 0.0 14.0 16.0) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
+  (notes-to-clip (take-beats 16.0 (filter (complement (within-beats 0.0 14.0 16.0)) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
+  (notes-to-clip (take-beats 16.0 (remove (within-beats 0.0 14.0 16.0) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
+  
+  )
+
+(defn fire-clip [track clip-slot]
+  (control *control-client* (str "path live_set tracks " track " clip_slots " clip-slot " clip") "call fire")
+  )
+
+(comment
+  (fire-clip 0 0)
+  (fire-clip 0 1)
   )
 
 (defn query [ctx & args]
@@ -201,3 +242,31 @@ call done
 ;(def t (query-tracks *query-ctx*))
 ;(def s (query-song *query-ctx*))
 ;(pp/pprint (-> s :tracks (nth 0) :clip_slots (nth 0)))
+
+(defn- update-time [time msg]
+  (let [args (:args msg)
+        time {:bars (first args) :beats (second args) :ticks (nth args 2)}]
+;    (println msg)
+    (comment (if (= (:beats time) 1)
+               (control *control-client* (str "path live_set scenes " (mod (:bars time) 2)) "call fire")))
+    (comment (if (= (:beats time) 1)
+               (fire-clip 0 (mod (:bars time) 2))))
+    time))
+
+(defonce *time-ctx* (let [time (atom { :bars 0 :beats 1 :ticks 0 })
+                           time-server (osc-server 4567)]
+                       (osc-handle time-server "/clj4l/time" #(swap! time update-time %))
+                       {:time-server time-server :time time}))
+
+(comment
+  (control *control-client* "path live_set" "call continue_playing")
+  (control *control-client* "path live_set" "call stop_playing")
+  (control *control-client* "path live_set" "call stop_all_clips")
+  (control *control-client* "path live_set" "set current_song_time 0")
+  (control *control-client* "path live_set" "set current_song_time 16")
+  (control *control-client* "path live_set" (str "set current_song_time " (* 12 4)))
+  (control *control-client* "path live_set" "set current_song_time 0" "call start_playing")
+  (control *control-client* "path live_set" "set current_song_time 16" "call continue_playing")
+  (control *control-client* "path live_set scenes 0" "call fire")
+  (control *control-client* "path live_set scenes 1" "call fire")
+  )  
