@@ -150,6 +150,13 @@ call done
 (defn take-beats [n coll]
   (take-while #(< (% 1) n) coll))
 
+(defn repeat-beats [n-coll dur & args]
+  (let [times (if (first args) (range (first args)) (iterate inc 0))]
+    (mapcat (fn [t] (map #(alter-note %1 1 + %2) n-coll (repeat (* dur t)))) times)))
+
+; (take 10 (repeat-beats [[36 0.0 0.25 100 0]] 4.0))
+; (take 10 (repeat-beats [[36 0.0 0.25 100 0]] 4.0 2))
+
 (defn within-beats [l u & args]
   (let [len (if (odd? (count args)) (last args))
         coll (concat [[l u]] (partition 2 args))]
@@ -157,18 +164,19 @@ call done
       (let [v (if len (mod (n 1) len) (n 1))]
         (some #(and (<= (first %) v) (<= v (last %))) coll)))))
 
-(defn alter-time [n-coll t-coll dur]
-  (map #(assoc %1 1 %2) (repeat n-coll) (mapcat #(map + t-coll (repeat (* dur %))) (iterate inc 0))))
+(defn alter-time [n t-coll dur]
+  (map #(assoc %1 1 %2) (repeat n) (mapcat #(map + t-coll (repeat (* dur %))) (iterate inc 0))))
+
+; (take 5 (alter-time [36 0.0 0.25 100 0] [0.0 2.0] 4.0))
+; (take 5 (alter-time [36 0.0 0.25 100 0] [0.0] 1.0))
 
 (comment
   ; number sets, velocity/time snare ramp
-  (notes-to-clip (concat (take-beats 16.0  (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0])) 
-                         (take-beats 16.0 (iterate #(alter-note % 1 + 2.0) [39 1.0 0.25 100 0]))
-                         (take-beats 16.0 (iterate #(alter-note % 1 + 1.0) [46 0.5 0.25 100 0]))) 1 0)
-  (notes-to-clip (take-beats 16.0 (filter (within-beats 0.0 14.0 16.0) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
-  (notes-to-clip (take-beats 16.0 (filter (complement (within-beats 0.0 14.0 16.0)) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
-  (notes-to-clip (take-beats 16.0 (remove (within-beats 0.0 14.0 16.0) (iterate #(alter-note % 1 + 1.0) [36 0.0 0.25 100 0]))) 1 0)
-  
+  (notes-to-clip (concat (take-beats 16.0  (alter-time [36 0.0 0.25 100 0] [0.0] 1.0)) 
+                         (take-beats 16.0 (alter-time [39 1.0 0.25 100 0] [1.0] 2.0))
+                         (take-beats 16.0 (alter-time [46 0.5 0.25 100 0] [0.5] 1.0))) 1 0)
+  (notes-to-clip (take-beats 16.0 (filter (within-beats 0.0 14.0 16.0) (alter-time [36 0.0 0.25 100 0] [0.0] 1.0))) 1 0)
+  (notes-to-clip (take-beats 16.0 (repeat-beats [[36 0.0 0.25 100 0] [36 0.5 0.25 100 0]] 4.0 2)))
   )
 
 (defn fire-clip [track clip-slot]
