@@ -154,9 +154,6 @@ call done
   (let [times (if (first args) (range (first args)) (iterate inc 0))]
     (mapcat (fn [t] (map #(alter-note %1 1 + %2) n-coll (repeat (* dur t)))) times)))
 
-; (take 10 (repeat-beats [[36 0.0 0.25 100 0]] 4.0))
-; (take 10 (repeat-beats [[36 0.0 0.25 100 0]] 4.0 2))
-
 (defn within-beats [l u & args]
   (let [len (if (odd? (count args)) (last args))
         coll (concat [[l u]] (partition 2 args))]
@@ -167,16 +164,13 @@ call done
 (defn alter-time [n t-coll dur]
   (map #(assoc %1 1 %2) (repeat n) (mapcat #(map + t-coll (repeat (* dur %))) (iterate inc 0))))
 
-; (take 5 (alter-time [36 0.0 0.25 100 0] [0.0 2.0] 4.0))
-; (take 5 (alter-time [36 0.0 0.25 100 0] [0.0] 1.0))
-
 (comment
   ; number sets, velocity/time snare ramp
   (notes-to-clip (concat (take-beats 16.0  (alter-time [36 0.0 0.25 100 0] [0.0] 1.0)) 
                          (take-beats 16.0 (alter-time [39 1.0 0.25 100 0] [1.0] 2.0))
                          (take-beats 16.0 (alter-time [46 0.5 0.25 100 0] [0.5] 1.0))) 1 0)
   (notes-to-clip (take-beats 16.0 (filter (within-beats 0.0 14.0 16.0) (alter-time [36 0.0 0.25 100 0] [0.0] 1.0))) 1 0)
-  (notes-to-clip (take-beats 16.0 (repeat-beats [[36 0.0 0.25 100 0] [36 0.5 0.25 100 0]] 4.0 2)))
+  (notes-to-clip (take-beats 16.0 (repeat-beats [[36 0.0 0.25 100 0] [36 0.5 0.25 100 0]] 4.0 2)) 1 0)
   )
 
 (defn fire-clip [track clip-slot]
@@ -191,10 +185,10 @@ call done
 (defn query [ctx & args]
   (println "query: " args)
   (in-osc-bundle (:query-client ctx) OSC-TIMETAG-NOW
-                    (osc-send (:query-client ctx) "/clj4l/query/begin")
-                    (doseq [cmd (map #(str/split % #"\s+") args)]
-                      (apply osc-send (:query-client ctx) (str "/clj4l/query/" (if (= (first cmd) "path") "path" "object")) cmd))
-                    (osc-send (:query-client ctx) "/clj4l/query/end"))
+                 (osc-send (:query-client ctx) "/clj4l/query/begin")
+                 (doseq [cmd (map #(str/split % #"\s+") args)]
+                   (apply osc-send (:query-client ctx) (str "/clj4l/query/" (if (= (first cmd) "path") "path" "object")) cmd))
+                 (osc-send (:query-client ctx) "/clj4l/query/end"))
      (if (osc-recv (:result-server ctx) "/clj4l/result/end" 2000)
        @(:result ctx)
        (throw (Exception. "Timed out waiting for query result."))))
@@ -278,3 +272,18 @@ call done
   (control *control-client* "path live_set scenes 0" "call fire")
   (control *control-client* "path live_set scenes 1" "call fire")
   )  
+
+(def *song* {:scenes [{:name "Scene1" :length 4}
+                      {:name "Scene2" :length 4}]})
+
+(defn play-scene [song index]
+  (let [scene (nth (:scenes song) index)]
+    (prn scene)))
+
+(defn play-song
+  ([] (play-song *song*))
+  ([song]
+;     (control *control-client* "path live_set" "call stop_playing")
+     (play-scene song 0)
+ ;    (control *control-client* "path live_set" call star)
+     ))
