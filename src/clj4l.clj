@@ -1,4 +1,6 @@
 (ns clj4l
+  "In max4l, to receive osc, use udpreceive without cnmat compatiblity, deferlow, skip OpenSoundControl,
+   go directly to OSC-route." 
   (:require
    [clojure.string :as str]
    [clojure.contrib.logging :as log]
@@ -29,13 +31,24 @@
 (set-log-level! java.util.logging.Level/FINEST)
 
 (defn control [client & args]
-  (osc/in-osc-bundle client osc/OSC-TIMETAG-NOW
-                 (doseq [cmd (map #(str/split % #"\s+") args)]
-                   (apply osc/osc-send client (str "/clj4l/control/" (if (= (first cmd) "path") "path" "object")) cmd))))
+  (doseq [cmd (map #(str/split % #"\s+") args)]
+    (apply osc/osc-send client (str "/clj4l/control/" (if (= (first cmd) "path") "path" "object")) cmd)))
+
+; pitch time duration velocity muted
+(defn notes-to-clip
+  ([track clip-slot notes]
+     (notes-to-clip *control-client* track clip-slot notes))
+  ([client track clip-slot notes]
+     (apply control client (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
+                                    "call select_all_notes" "call replace_selected_notes"
+                                    (str "call notes " (count notes))]
+                                   (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))))
 
 (comment
+  (notes-to-clip 0 0 [[60 0.0 0.5 100 0 ]])
+  (notes-to-clip 0 0 [[67 0.0 0.5 100 0 ]])
+  
   (control *control-client* "path live_set" "call continue_playing")
-  (control *control-client* "path live_set" "call stop_playing")
   (control *control-client* "path live_set" "call stop_all_clips")
   (control *control-client* "path live_set" "set current_song_time 0")
   (control *control-client* "path live_set" "set current_song_time 16")
@@ -45,6 +58,4 @@
   (control *control-client* "path live_set scenes 0" "call fire")
   (control *control-client* "path live_set scenes 1" "call fire")
   )
-
-
 
