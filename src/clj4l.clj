@@ -38,22 +38,40 @@
       @(:result *query-ctx*)
       (throw (Exception. "Timed out waiting for query result.")))))
 
-;(query "path live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
-;(query "path live_set" "get tracks")
+(defn as-map [coll]
+  (reduce #(assoc %1 (-> %2 first keyword)
+                  (let [v (next %2)] (if (> (count v) 1) v (first v))))
+          {} coll))
+
+(defn query-props [path & props]
+  (-> (apply query path (map #(str "get " (name %1)) props)) as-map))
+
+(defn query-children [path name & props]
+  (let [children (->> (query-props path name) name (partition 2)
+                      (map #(apply query-props (apply str (interpose \space %1)) props))
+                      (map-indexed #(assoc %2 :index %1))
+                      (map #(update-in %1 [])))]
+    children))
+
+; (query-children "goto live_set" :tracks :name)
+; (query-children "goto live_set" :scenes :name)
+; (query-props "goto live_set" :tracks :scenes :clip_trigger_quantization)
+; (query-props "goto live_set" :tracks)
+; (query-props "goto live_set" "tracks")
+; (query "path live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
+; (query "path live_set" "get tracks")
+; (as-map (query "path live_set" "get tracks"))
 
 (defn control [& args]
   (doseq [cmd (map #(str/split % #"\s+") args)]
     (apply osc/osc-send *control-client* (str "/clj4l/control/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd)))
 
 ; pitch time duration velocity muted
-(defn notes-to-clip
-  ([track clip-slot notes]
-     (notes-to-clip *control-client* track clip-slot notes))
-  ([client track clip-slot notes]
-     (apply control client (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
-                                    "call select_all_notes" "call replace_selected_notes"
-                                    (str "call notes " (count notes))]
-                                   (map #(apply str "call note " (interpose " " %)) notes) ["call done"]))))
+(defn notes-to-clip [track clip-slot notes]
+  (apply control (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
+                           "call select_all_notes" "call replace_selected_notes"
+                           (str "call notes " (count notes))]
+                          (map #(apply str "call note " (interpose " " %)) notes) ["call done"])))
 
 (comment
   (control "goto live_set" "getinfo")
@@ -61,8 +79,8 @@
   (control "goto live_set" "get tracks")
 
   (notes-to-clip 0 0 [[60 0.0 0.5 100 0 ]])
-  (notes-to-clip 0 0 [[67 0.0 0.5 100 0 ]])
-  
+  (notes-to-clip 0 0 [[67 0.0 0.5 100 0 ]]) 
+ 
   (control "goto live_set" "call continue_playing")
   (control "goto live_set" "call stop_all_clips")
   (control "path live_set" "set current_song_time 0")
