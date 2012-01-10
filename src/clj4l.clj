@@ -38,29 +38,41 @@
       @(:result *query-ctx*)
       (throw (Exception. "Timed out waiting for query result.")))))
 
-(defn as-map [coll]
-  (reduce #(assoc %1 (-> %2 first keyword)
-                  (let [v (next %2)] (if (> (count v) 1) v (first v))))
-          {} coll))
-
 (defn query-props [path & props]
-  (-> (apply query path (map #(str "get " (name %1)) props)) as-map))
+  (->> (apply query path (map #(str "get " (name %1)) props))
+       (reduce #(assoc %1 (-> %2 first keyword)
+                       (let [v (next %2)] (if (> (count v) 1) v (first v))))
+               {})))
+
+; (query-props "goto live_set" :tracks :scenes :clip_trigger_quantization)
+
+(defn- as-key [s]
+  "Live uses <empty> for scenes without names."
+  (if (and s (not= s "<empty>"))
+    (-> s
+        (clojure.string/replace #"^\d*\s+" "")
+        (clojure.string/replace #"\s+" "-")
+        keyword)))
+
+; (map as-key ["abacab" "1 Track 1" "  1" nil "<empty>"])
 
 (defn query-children [path name & props]
-  (let [children (->> (query-props path name) name (partition 2)
-                      (map #(apply query-props (apply str (interpose \space %1)) props))
-                      (map-indexed #(assoc %2 :index %1))
-                      (map #(update-in %1 [])))]
-    children))
+  ":name is implicit in props"
+  (->> (query-props path name) name (partition 2)
+                       (map #(apply query-props (apply str (interpose \space %1)) (conj props :name)))
+                       (map-indexed #(assoc %2 :index %1))
+                       (map #(assoc % :key (as-key (:name %))))
+                       (filter :key)
+                       (reduce (fn [result {key :key :as m}]
+                                 (if (find result key)
+                                   (throw (Exception. (str "Duplicate key " key)))
+                                   (assoc result key m))) {})))
 
-; (query-children "goto live_set" :tracks :name)
-; (query-children "goto live_set" :scenes :name)
-; (query-props "goto live_set" :tracks :scenes :clip_trigger_quantization)
-; (query-props "goto live_set" :tracks)
-; (query-props "goto live_set" "tracks")
+; (query-children "goto live_set" :tracks)
+; (query-children "goto live_set" :scenes)
+; (query "path live_set tracks 0 clip_slots 100 clip" "call select_all_notes" "call get_selected_notes")
 ; (query "path live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
 ; (query "path live_set" "get tracks")
-; (as-map (query "path live_set" "get tracks"))
 
 (defn control [& args]
   (doseq [cmd (map #(str/split % #"\s+") args)]
