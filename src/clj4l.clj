@@ -8,6 +8,9 @@
 
 ; (alter-var-root #'*out* (constantly *out*))
 
+(def *tracks*)
+(def *scenes*)
+
 (defn set-log-level!
   "http://www.paullegato.com/blog/setting-clojure-log-level/"
   [level]
@@ -41,10 +44,7 @@
 (defn query-props [path & props]
   (->> (apply query path (map #(str "get " (name %1)) props))
        (reduce #(assoc %1 (-> %2 first keyword)
-                       (let [v (next %2)] (if (> (count v) 1) v (first v))))
-               {})))
-
-; (query-props "goto live_set" :tracks :scenes :clip_trigger_quantization)
+                       (let [v (next %2)] (if (> (count v) 1) v (first v)))) {})))
 
 (defn- as-key [s]
   "Live uses <empty> for scenes without names."
@@ -53,8 +53,6 @@
         (clojure.string/replace #"^\d*\s+" "")
         (clojure.string/replace #"\s+" "-")
         keyword)))
-
-; (map as-key ["abacab" "1 Track 1" "  1" nil "<empty>"])
 
 (defn query-children [path name & props]
   ":name is implicit in props"
@@ -68,39 +66,34 @@
                                    (throw (Exception. (str "Duplicate key " key)))
                                    (assoc result key m))) {})))
 
-; (query-children "goto live_set" :tracks)
-; (query-children "goto live_set" :scenes)
-; (query "path live_set tracks 0 clip_slots 100 clip" "call select_all_notes" "call get_selected_notes")
-; (query "path live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
-; (query "path live_set" "get tracks")
-
 (defn control [& args]
   (doseq [cmd (map #(str/split % #"\s+") args)]
     (apply osc/osc-send *control-client* (str "/clj4l/control/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd)))
 
+(defn track-index [key] (-> key *tracks* :index))
+(defn scene-index [key] (-> key *scenes* :index))
+
+(defmacro with-m4l [& body]
+  `(binding [*tracks* (query-children "goto live_set" :tracks)
+             *scenes* (query-children "goto live_set" :scenes)]
+     (do ~@body)))
+
 ; pitch time duration velocity muted
-(defn notes-to-clip [track clip-slot notes]
-  (apply control (concat [(str "path live_set tracks " track " clip_slots " clip-slot "  clip")
-                           "call select_all_notes" "call replace_selected_notes"
-                           (str "call notes " (count notes))]
-                          (map #(apply str "call note " (interpose " " %)) notes) ["call done"])))
+(defn set-notes [track scene notes]
+  (control (str "path live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
+           "call select_all_notes" "call replace_selected_notes" (str "call notes " (count notes)))
+  (doseq [n notes] (control (apply str "call note " (interpose \space n))))
+  (control "call done"))
+
+(comment (defn get-notes [track scene]
+            (control (str "path live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
+                     "call select_all_notes" "call get_selected_notes")))
 
 (comment
-  (control "goto live_set" "getinfo")
-  (control "goto live_set tracks 0" "get name")
-  (control "goto live_set" "get tracks")
-
-  (notes-to-clip 0 0 [[60 0.0 0.5 100 0 ]])
-  (notes-to-clip 0 0 [[67 0.0 0.5 100 0 ]]) 
+  (with-m4l (set-notes :synth :1 [[60 0.0 0.5 100 0]]))
+  (with-m4l (set-notes :synth :1 [[67 0.0 0.5 100 0]]))
  
-  (control "goto live_set" "call continue_playing")
-  (control "goto live_set" "call stop_all_clips")
-  (control "path live_set" "set current_song_time 0")
-  (control "path live_set" "set current_song_time 16")
-  (control "path live_set" (str "set current_song_time " (* 12 4)))
-  (control "path live_set" "set current_song_time 0" "call start_playing")
-  (control "path live_set" "set current_song_time 16" "call continue_playing")
-  (control "path live_set scenes 0" "call fire")
-  (control "path live_set scenes 1" "call fire")
+  (control "goto live_set" "call start_playing")
+  (control "goto live_set" "call stop_playing")
   )
 
