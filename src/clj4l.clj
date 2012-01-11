@@ -80,18 +80,32 @@
 
 ; pitch time duration velocity muted
 (defn set-notes [track scene notes]
-  (control (str "path live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
+  (control (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
            "call select_all_notes" "call replace_selected_notes" (str "call notes " (count notes)))
   (doseq [n notes] (control (apply str "call note " (interpose \space n))))
   (control "call done"))
 
-(comment (defn get-notes [track scene]
-            (control (str "path live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
-                     "call select_all_notes" "call get_selected_notes")))
+(defn get-notes [track scene]
+  (->> (query (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
+              "call select_all_notes" "call get_selected_notes")
+       (filter #(= (first %) "get_selected_notes")) (drop 1) butlast (map #(->> % (drop 2) vec)) vec))
+
+(defn set-loop
+  ([track scene end] (set-loop track scene 0.0 end))
+  ([track scene start end]
+     (control (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
+              (str "set loop_start " start) (str "set loop_end " end) "set looping 1")))
 
 (comment
-  (with-m4l (set-notes :synth :1 [[60 0.0 0.5 100 0]]))
+  (with-m4l (set-loop :synth :1 4.0))
+  (with-m4l (set-loop :synth :1 8.0))
+  (query-props "goto live_set tracks 0 clip_slots 0 clip" :length :loop_start :loop_end :looping :name)
+
+  (with-m4l (get-notes :synth :1))
+  (with-m4l (set-notes :synth :1 [[60 0.0 0.5 100 0] [60 1.0 0.5 100 0]]))
   (with-m4l (set-notes :synth :1 [[67 0.0 0.5 100 0]]))
+
+  (query "goto live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
  
   (control "goto live_set" "call start_playing")
   (control "goto live_set" "call stop_playing")
