@@ -28,7 +28,7 @@
 (defonce *query-ctx* (let [result (atom [])
                            result-server (osc/osc-server 3456)]
                        (osc/osc-handle result-server "/clj4l/result/begin" (fn [msg] (reset! result [])))
-                       (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args (log/spy msg)))))
+                       (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args msg))))
                        {:query-client (osc/osc-client "127.0.0.1" 6543) :result-server result-server :result result }))
 
 (defn query [& args]
@@ -88,7 +88,8 @@
 (defn get-notes [track scene]
   (->> (query (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
               "call select_all_notes" "call get_selected_notes")
-       (filter #(= (first %) "get_selected_notes")) (drop 1) butlast (map #(->> % (drop 2) vec)) vec))
+       (filter #(= (first %) "get_selected_notes")) (drop 1) (drop-last) (map #(->> % (drop 2) vec))
+       #_(map (fn [[p t d v]] {:p p :t t :d d :v v})) vec))
 
 (defn set-loop
   ([track scene end] (set-loop track scene 0.0 end))
