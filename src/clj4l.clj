@@ -70,8 +70,17 @@
   (doseq [cmd (map #(str/split % #"\s+") args)]
     (apply osc/osc-send *control-client* (str "/clj4l/control/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd)))
 
-(defn scene-index [key] (-> key *scenes* :index))
-(defn track-index [key] (-> key *tracks* :index))
+(letfn [(get-index [m k err]
+                   (if (number? k)
+                     k
+                     (if-let [index (-> k m :index)]
+                       index
+                       (throw (IllegalArgumentException. (str err ": dreadful key: " key))))))]
+  (defn track-index [key] (get-index *tracks* key "track-index"))
+  (defn scene-index [key] (get-index *scenes* key "scene-index")))
+
+; (with-m4l (scene-index :seed-1))
+
 (defn scene-track-path [scene track] (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip"))
 
 (defmacro with-m4l [& body]
