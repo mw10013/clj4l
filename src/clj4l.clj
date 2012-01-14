@@ -70,8 +70,9 @@
   (doseq [cmd (map #(str/split % #"\s+") args)]
     (apply osc/osc-send *control-client* (str "/clj4l/control/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd)))
 
-(defn track-index [key] (-> key *tracks* :index))
 (defn scene-index [key] (-> key *scenes* :index))
+(defn track-index [key] (-> key *tracks* :index))
+(defn scene-track-path [scene track] (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip"))
 
 (defmacro with-m4l [& body]
   `(binding [*tracks* (query-children "goto live_set" :tracks)
@@ -79,23 +80,45 @@
      (do ~@body)))
 
 ; pitch time duration velocity muted
-(defn set-notes [track scene notes]
-  (control (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
-           "call select_all_notes" "call replace_selected_notes" (str "call notes " (count notes)))
-  (doseq [n notes] (control (apply str "call note " (interpose \space n))))
-  (control "call done"))
+(defn set-notes [scene track notes]
+  (when (seq notes)
+    (control (scene-track-path scene track) "call select_all_notes" "call replace_selected_notes"
+             (str "call notes " (count notes)))
+    (doseq [n notes] (control (apply str "call note " (interpose \space n))))
+    (control "call done")))
 
-(defn get-notes [track scene]
-  (->> (query (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
-              "call select_all_notes" "call get_selected_notes")
+(defn get-notes [scene track]
+  (->> (query (scene-track-path scene track) "call select_all_notes" "call get_selected_notes")
        (filter #(= (first %) "get_selected_notes")) (drop 1) (drop-last) (map #(->> % (drop 2) vec))
        #_(map (fn [[p t d v]] {:p p :t t :d d :v v})) vec))
 
+(defn note-seq [length notes]
+  (for [offset (iterate (partial + length) 0) [_ t :as n] notes] (update-in n [1] + offset)))
+
+(defn take-beats [n notes] (take-while (fn [[ _ t]] (< t n)) notes))
+
+(defn get-note-seq [scene track] (note-seq (:loop_end (get-loop scene track)) (get-notes scene track)))
+
+(defn get-loop [scene track]
+  (query-props (scene-track-path scene track) :loop_start :loop_end :looping :length))
+
 (defn set-loop
-  ([track scene end] (set-loop track scene 0.0 end))
-  ([track scene start end]
-     (control (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip")
-              (str "set loop_start " start) (str "set loop_end " end) "set looping 1")))
+  ([scene track end] (set-loop scene track 0.0 end))
+  ([scene track start end]
+     (control (scene-track-path scene track) (str "set loop_start " start) (str "set loop_end " end) "set looping 1")))
+
+(defn set-matrix [matrix]
+  (let [track-keys (map #(-> % val :key) *tracks*)]
+    (println track-keys)
+    (doseq [[scene {:keys [scene-length] :as m}] matrix]
+      (doseq [[track f] (select-keys m track-keys)]
+        (set-notes scene track (take-beats scene-length (f)))))))
+
+(def matrix*
+     {:intro {:scene-length 16 :synth #(get-note-seq :seed-1 :synth) :drums #(get-note-seq :seed-1 :drums)}
+      :groove {:scene-length 4 :synth #(get-note-seq :seed-2 :synth) :drums #(get-note-seq :seed-2 :drums)}})
+
+(with-m4l (set-matrix matrix*))
 
 (comment
   (with-m4l (set-loop :synth :1 4.0))
