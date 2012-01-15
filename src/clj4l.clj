@@ -113,6 +113,8 @@
   (for [offset (iterate (partial + length) 0) n notes] (update-in n [:t] + offset)))
 
 (defn take-time [t notes] (take-while #(< (:t %) t) notes))
+(defn drop-time [t notes] (drop-while #(< (:t %) t) notes))
+(defn offset-time [t notes] (map #(update-in % [:t] + t) notes))
 
 (defn get-loop [scene track]
   (query-props (scene-track-path scene track) :loop_start :loop_end :looping :length))
@@ -126,13 +128,36 @@
 
 (defn set-matrix [matrix]
   (let [track-keys (map #(-> % val :key) *tracks*)]
-    (doseq [[scene {:keys [scene-length] :as m}] matrix]
+    (doseq [[scene {:keys [scene-length] :as m}] (rseq matrix)]
       (doseq [[track f] (select-keys m track-keys)]
-        (set-notes scene track (take-time scene-length (f)))))))
+        (set-notes scene track (take-time scene-length (f)))
+        (set-loop scene track scene-length)))))
+
+(defn scene-note-seqs [scene & tracks]
+  (reduce (fn [m track] (assoc m track #(get-note-seq scene track))) {} tracks))
+
+(def matrix-*
+     [[:intro (merge (scene-note-seqs :seed-1 :synth :drums)
+                     {:drums #(get-note-seq :seed-2 :drums)
+                      :scene-length 16})]
+      [:groove (merge (scene-note-seqs :seed-2 :synth :drums) {:scene-length 4})]])
+
+(defn track-note-seq [track & specs]
+  "spec is [scene take drop] where drop is optional"
+  (let [m (reduce (fn [{:keys [t coll] :as m} [scene take drop]]
+                    (let [drop (if drop drop 0)]
+                      (-> m
+                          (update-in [:coll] conj (->> (get-note-seq scene track) (drop-time drop) (offset-time drop)
+                                                       (take-time take) (offset-time t)))
+                          (update-in [:t] + take))))
+                  {:t 0 :coll []} specs)]
+    (note-seq (:t m) (apply concat (:coll m)))))
+
+; (with-m4l (track-note-seq :drums [0 12 :seed-1] [0 4 :seed-2]))
 
 (def matrix*
-     {:intro {:scene-length 16 :synth #(get-note-seq :seed-1 :synth) :drums #(get-note-seq :seed-1 :drums)}
-      :groove {:scene-length 4 :synth #(get-note-seq :seed-2 :synth) :drums #(get-note-seq :seed-2 :drums)}})
+     [[:intro {:drums #(track-note-seq :drums [:seed-1 4] [:seed-2 4])
+        :scene-length 16}]])
 
 (with-m4l (set-matrix matrix*))
 
