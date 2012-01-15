@@ -31,11 +31,24 @@
                        (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args msg))))
                        {:query-client (osc/osc-client "127.0.0.1" 6543) :result-server result-server :result result }))
 
-(defn query [& args]
+(defn- as-osc-msgs [path-prefix msgs]
+  (->> msgs
+       (map (fn [x]
+              (if (string? x)
+                (str/split x #"\s+")
+                (concat (str/split (first x) #"\s+") (rest x)))))
+       (map (fn [coll]
+              (cons (str path-prefix (if (#{"path" "goto"} (first coll)) "path" "object")) coll)))))
+
+(defn control [& msgs]
+  (doseq [msg (as-osc-msgs "/clj4l/control/" msgs)]
+    (apply osc/osc-send *control-client* (log/spy msg))))
+
+(defn query [& msgs]
   (let [client (:query-client *query-ctx*)]
     (osc/osc-send client "/clj4l/query/begin")
-    (doseq [cmd (map #(str/split % #"\s+") args)]
-      (apply osc/osc-send client (str "/clj4l/query/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd))
+    (doseq [msg (as-osc-msgs "/clj4l/query/" msgs)]
+      (apply osc/osc-send client (log/spy msg)))
     (osc/osc-send client "/clj4l/query/end")
     (if (osc/osc-recv (:result-server *query-ctx*) "/clj4l/result/end" 2000)
       @(:result *query-ctx*)
@@ -66,10 +79,6 @@
                                    (throw (Exception. (str "Duplicate key " key)))
                                    (assoc result key m))) {})))
 
-(defn control [& args]
-  (doseq [cmd (map #(str/split % #"\s+") args)]
-    (apply osc/osc-send *control-client* (str "/clj4l/control/" (if (#{"path" "goto"} (first cmd)) "path" "object")) cmd)))
-
 (letfn [(get-index [m k err]
                    (if (number? k)
                      k
@@ -78,8 +87,6 @@
                        (throw (IllegalArgumentException. (str err ": dreadful key: " key))))))]
   (defn track-index [key] (get-index *tracks* key "track-index"))
   (defn scene-index [key] (get-index *scenes* key "scene-index")))
-
-; (with-m4l (scene-index :seed-1))
 
 (defn scene-track-path [scene track] (str "goto live_set tracks " (track-index track) " clip_slots " (scene-index scene) " clip"))
 
@@ -130,13 +137,13 @@
 (with-m4l (set-matrix matrix*))
 
 (comment
-  (with-m4l (set-loop :synth :1 4.0))
-  (with-m4l (set-loop :synth :1 8.0))
+  (with-m4l (set-loop 0 0 4.0))
+  (with-m4l (set-loop 0 0 8.0))
   (query-props "goto live_set tracks 0 clip_slots 0 clip" :length :loop_start :loop_end :looping :name)
 
-  (with-m4l (get-notes :synth :1))
-  (with-m4l (set-notes :synth :1 [[60 0.0 0.5 100 0] [60 1.0 0.5 100 0]]))
-  (with-m4l (set-notes :synth :1 [[67 0.0 0.5 100 0]]))
+  (with-m4l (get-notes :seed-1 :synth))
+  (with-m4l (set-notes 0 0 [[60 0.0 0.5 100 0] [60 1.0 0.5 100 0]]))
+  (with-m4l (set-notes 0 0 [[67 0.0 0.5 100 0]]))
 
   (query "goto live_set tracks 0 clip_slots 0 clip" "call select_all_notes" "call get_selected_notes")
  
