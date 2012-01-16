@@ -98,6 +98,7 @@
 ; pitch time duration velocity muted
 (defn set-notes [scene track notes]
   (when (seq notes)
+    #_(log/spy ["set-notes" (vec notes)])
     (control (scene-track-path scene track) "call select_all_notes" "call replace_selected_notes"
              (str "call notes " (count notes)))
     ; str hack since doubles don't go over the wire well.
@@ -105,9 +106,10 @@
     (control "call done")))
 
 (defn get-notes [scene track]
+  "m4l does not seem to order notes by time"
   (->> (query (scene-track-path scene track) "call select_all_notes" "call get_selected_notes")
        (filter #(= (first %) "get_selected_notes")) (drop 1) (drop-last) (map #(->> % (drop 2) vec))
-       (map (fn [[p t d v]] {:p p :t t :d d :v v}))))
+       (map (fn [[p t d v]] {:p p :t t :d d :v v})) (sort #(< (:t %1) (:t %2)))))
 
 (defn note-seq [length notes]
   (for [offset (iterate (partial + length) 0) n notes] (update-in n [:t] + offset)))
@@ -127,6 +129,7 @@
 (defn get-note-seq [scene track] (note-seq (:loop_end (get-loop scene track)) (get-notes scene track)))
 
 (defn set-matrix [matrix]
+  #_(log/spy "set-matrix")
   (let [track-keys (map #(-> % val :key) *tracks*)]
     (doseq [[scene {:keys [scene-length] :as m}] (rseq matrix)]
       (doseq [[track f] (select-keys m track-keys)]
@@ -147,16 +150,23 @@
   (let [m (reduce (fn [{:keys [t coll] :as m} [scene take drop]]
                     (let [drop (if drop drop 0)]
                       (-> m
-                          (update-in [:coll] conj (->> (get-note-seq scene track) (drop-time drop) (offset-time drop)
+                          (update-in [:coll] conj (->> (get-note-seq scene track) (drop-time drop) (offset-time (- drop))
                                                        (take-time take) (offset-time t)))
                           (update-in [:t] + take))))
                   {:t 0 :coll []} specs)]
     (note-seq (:t m) (apply concat (:coll m)))))
 
-; (with-m4l (track-note-seq :drums [0 12 :seed-1] [0 4 :seed-2]))
+(comment
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4] [:seed-1 4] [:seed-1 4] [:seed-1 4 12])))
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4 0])))
+
+  (with-m4l (take-time 16 (->> (get-note-seq :seed-1 :drums) (drop-time 12) (offset-time -12) (take-time 4) (offset-time 0))))
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4] [:seed-1 4] [:seed-1 4] [:seed-1 4 12])))
+  (with-m4l (take-time 16 (track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12])))
+  )
 
 (def matrix*
-     [[:intro {:drums #(track-note-seq :drums [:seed-1 4] [:seed-2 4])
+     [[:intro {:drums #(track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12])
         :scene-length 16}]])
 
 (with-m4l (set-matrix matrix*))
