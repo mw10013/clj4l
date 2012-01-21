@@ -117,6 +117,11 @@
 (defn take-time [t notes] (take-while #(< (:t %) t) notes))
 (defn drop-time [t notes] (drop-while #(< (:t %) t) notes))
 (defn offset-time [t notes] (map #(update-in % [:t] + t) notes))
+(defn times-time [t times notes] (take-time (* t times) (note-seq t notes)))
+
+; (take 5 (note-seq 4 [{:t 0.0 :p 64}]))
+; (take 5 (repeat-time 4 2 [{:t 0 :p 64} {:t 3 :p 66}]))
+; (take 5 (repeat-time 4 0 [{:t 0 :p 64}]))
 
 (defn get-loop [scene track]
   (query-props (scene-track-path scene track) :loop_start :loop_end :looping :length))
@@ -147,31 +152,45 @@
 
 (defn track-note-seq [track & specs]
   "spec is [scene take drop] where drop is optional"
-  (let [m (reduce (fn [{:keys [t coll] :as m} [scene take drop]]
-                    (let [drop (if drop drop 0)]
+  (let [m (reduce (fn [{:keys [t coll] :as m} [scene take times drop]]
+                    (let [times (if times times 1)
+                          drop (if drop drop 0)]
                       (-> m
                           (update-in [:coll] conj (->> (get-note-seq scene track) (drop-time drop) (offset-time (- drop))
-                                                       (take-time take) (offset-time t)))
-                          (update-in [:t] + take))))
+                                                       (take-time take) (times-time take times) (offset-time t)))
+                          (update-in [:t] + (* take times)))))
                   {:t 0 :coll []} specs)]
     (note-seq (:t m) (apply concat (:coll m)))))
 
 (comment
-  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4] [:seed-1 4] [:seed-1 4] [:seed-1 4 12])))
-  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4 0])))
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4 3] [:seed-1 4 0 12])))
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4])))
 
   (with-m4l (take-time 16 (->> (get-note-seq :seed-1 :drums) (drop-time 12) (offset-time -12) (take-time 4) (offset-time 0))))
-  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4] [:seed-1 4] [:seed-1 4] [:seed-1 4 12])))
+  (with-m4l (take-time 16 (track-note-seq :drums [:seed-1 4] [:seed-1 4] [:seed-1 4] [:seed-1 4 0 12])))
   (with-m4l (take-time 16 (track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12])))
   )
 
-(def matrix*
+(def demo-matrix*
      [[:intro {:drums #(track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12])
-        :scene-length 16}]])
+               :scene-length 16}]])
 
-(with-m4l (set-matrix matrix*))
+; (with-m4l (set-matrix demo-matrix*))
+
+(def dms-matrix*
+     [[:intro {:drums #(track-note-seq :drums [:intro 4 3] [:intro 4 1 12])
+               :bass #(track-note-seq :bass [:groove 16])
+               :scene-length 16}
+       ]])
+
+; (with-m4l (set-matrix dms-matrix*))
 
 (comment
+  (with-m4l
+    (def tracks* *tracks*)
+    (take-time 16 (track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12]))
+    #_(take-time 16 (track-note-seq :Bassline [:intro 4] [:intro 4] [:intro 4] [:intro 4 12])))
+
   (with-m4l (set-loop 0 0 4.0))
   (with-m4l (set-loop 0 0 8.0))
   (query-props "goto live_set tracks 0 clip_slots 0 clip" :length :loop_start :loop_end :looping :name)
