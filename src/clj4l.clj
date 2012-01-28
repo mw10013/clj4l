@@ -4,7 +4,9 @@
   (:require
    [clojure.string :as str]
    [clojure.contrib.logging :as log]
-   [osc :as osc]))
+   [osc :as osc])
+  (:use [clojure.java.shell :only [sh]])
+  (:import (javax.sound.midi Sequencer Sequence Track MidiEvent MidiMessage ShortMessage MidiSystem)))
 
 ; (alter-var-root #'*out* (constantly *out*))
 
@@ -136,7 +138,7 @@
 (defn set-matrix [matrix]
   #_(log/spy "set-matrix")
   (let [track-keys (map #(-> % val :key) *tracks*)]
-    (doseq [[scene {:keys [scene-length] :as m}] (rseq matrix)]
+    (doseq [[scene {:keys [scene-length] :as m}] matrix]
       (doseq [[track f] (select-keys m track-keys)]
         (set-notes scene track (take-time scene-length (f)))
         (set-loop scene track scene-length)))))
@@ -178,12 +180,39 @@
 ; (with-m4l (set-matrix demo-matrix*))
 
 (def dms-matrix*
-     [[:intro {:drums #(track-note-seq :drums [:intro 4 3] [:intro 4 1 12])
-               :bass #(track-note-seq :bass [:groove 16])
-               :scene-length 16}
-       ]])
+     [
 
-; (with-m4l (set-matrix dms-matrix*))
+      [:intro {:drums #(track-note-seq :drums [:intro 4 3] [:intro 4 1 12])               
+               :scene-length 16}]
+      [:intro-1 {:drums #(track-note-seq :drums [:intro 4 3] [:intro-1 4 1 12])
+                 :scene-length 16}]
+      [:intro-2 {:drums #(track-note-seq :drums [:intro-2 4 3] [:intro-2 4 1 12])
+                 :bass #(track-note-seq :bass [:intro-1 16])
+                 :scene-length 16}]
+      [:intro-3 {:drums #(track-note-seq :drums [:intro-2 4 3] [:intro-2 4 1 12])
+                 :bass #(track-note-seq :bass [:intro-1 16])
+                 :scene-length 16}]])
+
+                                        ; (with-m4l (set-matrix dms-matrix*))
+
+(defn note-event [pitch velocity tick]
+  (MidiEvent. (doto (ShortMessage.) (.setMessage ShortMessage/NOTE_ON pitch velocity)) tick))
+
+(defn midifile []
+  (let [sequence (Sequence. Sequence/PPQ 1)]
+    (doto (.createTrack sequence)
+      (.add (note-event 60 100 0))
+      (.add (note-event 60 0 1)))
+    (MidiSystem/write sequence, 1, (clojure.java.io/file "clj4l.mid"))))
+
+(defn ly []
+  (midifile)
+  (println (sh "pwd"))
+;  (println (sh "midi2ly" "-h"))
+  
+  (println (sh "midi2ly" "--duration-quant=16" "--start-quant=16" "clj4l.mid"))
+  (sh "lilypond" "--pdf" "clj4l-midi.ly")
+  (sh "open" "clj4l-midi.pdf"))
 
 (comment
   (with-m4l
