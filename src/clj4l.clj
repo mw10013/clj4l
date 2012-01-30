@@ -198,23 +198,38 @@
 (defn note-event [pitch velocity tick]
   (MidiEvent. (doto (ShortMessage.) (.setMessage ShortMessage/NOTE_ON pitch velocity)) tick))
 
-(defn midifile []
-  (let [sequence (Sequence. Sequence/PPQ 1)]
-    (doto (.createTrack sequence)
-      (.add (note-event 60 100 0))
-      (.add (note-event 60 0 1)))
+(defn midifile [matrix tracks scenes]
+  (let [ppq 480
+        sequence (Sequence. Sequence/PPQ ppq)
+        matrix (into {} matrix)        
+        groups (->> (for [track tracks scene scenes] [track scene (-> scene matrix :scene-length)])
+                    (group-by first))
+        note-event (fn [p v t] (MidiEvent. (doto (ShortMessage.) (.setMessage ShortMessage/NOTE_ON p v))
+                                          (* t ppq)))]
+    (doseq [track tracks]
+      (let [midi-track (.createTrack sequence)]
+        (reduce (fn [{:keys [track-t] :as m} [track scene scene-length]]
+                  (doseq [{:keys [p v t d]} (->> (get-notes scene track)
+                                 (take-time scene-length)
+                                 (offset-time track-t))]
+                    (doto midi-track
+                      (.add (note-event p v t))
+                      (.add (note-event p 0 (+ t d)))))
+                  (update-in m [:track-t] + scene-length)) {:track-t 0} (groups track))))
     (MidiSystem/write sequence, 1, (clojure.java.io/file "clj4l.mid"))))
 
-(defn ly []
-  (midifile)
-  (println (sh "pwd"))
-;  (println (sh "midi2ly" "-h"))
-  
+(defn notate [matrix tracks scenes]
+  (midifile matrix tracks scenes)
   (println (sh "midi2ly" "--duration-quant=16" "--start-quant=16" "clj4l.mid"))
-  (sh "lilypond" "--pdf" "clj4l-midi.ly")
-  (sh "open" "clj4l-midi.pdf"))
+  (println (sh "lilypond" "--pdf" "clj4l-midi.ly"))
+  (println (sh "open" "clj4l-midi.pdf")))
+
+; (with-m4l (notate dms-matrix* [:lead-synth :drums] [:intro :intro-1 :intro-2 :intro-3]))
+; (with-m4l (notate dms-matrix* [:lead-synth] [:intro :intro-1]))
 
 (comment
+  (with-m4l
+    (def notes* (get-notes :intro-3 :lead-synth)))
   (with-m4l
     (def tracks* *tracks*)
     (take-time 16 (track-note-seq :drums [:intro 4] [:intro 4] [:intro 4] [:intro 4 12]))
