@@ -193,12 +193,9 @@
                  :bass #(track-note-seq :bass [:intro-1 16])
                  :scene-length 16}]])
 
-                                        ; (with-m4l (set-matrix dms-matrix*))
+; (with-m4l (set-matrix dms-matrix*))
 
-(defn note-event [pitch velocity tick]
-  (MidiEvent. (doto (ShortMessage.) (.setMessage ShortMessage/NOTE_ON pitch velocity)) tick))
-
-(defn midifile [matrix tracks scenes]
+(defn midi-sequence [matrix tracks scenes]
   (let [ppq 480
         sequence (Sequence. Sequence/PPQ ppq)
         matrix (into {} matrix)        
@@ -216,16 +213,24 @@
                       (.add (note-event p v t))
                       (.add (note-event p 0 (+ t d)))))
                   (update-in m [:track-t] + scene-length)) {:track-t 0} (groups track))))
-    (MidiSystem/write sequence, 1, (clojure.java.io/file "clj4l.mid"))))
+    sequence))
 
 (defn notate [matrix tracks scenes]
-  (midifile matrix tracks scenes)
-  (println (sh "midi2ly" "--duration-quant=16" "--start-quant=16" "clj4l.mid"))
-  (println (sh "lilypond" "--pdf" "clj4l-midi.ly"))
-  (println (sh "open" "clj4l-midi.pdf")))
+  "Writes intermidiate files to ./clj4l. midi2ly and lilypond must be in path."
+  (let [dir "./.clj4l/"
+        base-name "clj4l"
+        midi-file (str dir base-name ".mid")
+        ly-file (str dir base-name ".ly")
+        midi-sequence (midi-sequence matrix tracks scenes)]
+    (println (sh "mkdir" "-p" dir))
+    (MidiSystem/write midi-sequence, 1, (clojure.java.io/file midi-file))
+    (println (sh "midi2ly" "--verbose" "--duration-quant=16" "--start-quant=16"
+                 (str "--output=" ly-file) midi-file))
+    (println (sh "lilypond" "--verbose" "--pdf" (str "--output=" dir base-name) ly-file))
+    (println (sh "open" (str dir base-name ".pdf")))))
 
 ; (with-m4l (notate dms-matrix* [:lead-synth :drums] [:intro :intro-1 :intro-2 :intro-3]))
-; (with-m4l (notate dms-matrix* [:lead-synth] [:intro :intro-1]))
+; (with-m4l (notate dms-matrix* [:lead-synth] [:intro :intro-1 :intro-2 :intro-3]))
 
 (comment
   (with-m4l

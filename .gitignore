@@ -6,3 +6,5 @@ classes
 *.clj-
 *.clj#
 .#*
+.clj4l
+
