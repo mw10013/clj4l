@@ -5,6 +5,7 @@ classes
 .DS_Store
 *.clj-
 *.clj#
+.lein-deps-sum
 .#*
 .clj4l
 

@@ -3,17 +3,17 @@
    go directly to OSC-route." 
   (:require
    [clojure.string :as str]
-   [clojure.contrib.logging :as log]
-   [osc :as osc])
+   [clojure.tools.logging :as log]
+   [overtone.osc :as osc])
   (:use [clojure.java.shell :only [sh]])
   (:import (javax.sound.midi Sequencer Sequence Track MidiEvent MidiMessage ShortMessage MidiSystem)))
 
 ; (alter-var-root #'*out* (constantly *out*))
 
-(def *tracks* nil)
-(def *scenes* nil)
+(def ^{:dynamic true} *tracks* nil)
+(def ^{:dynamic true} *scenes* nil)
 
-(defn set-log-level!
+#_(defn set-log-level!
   "http://www.paullegato.com/blog/setting-clojure-log-level/"
   [level]
   "Sets the root logger's level, and the level of all of its Handlers, to level."
@@ -22,16 +22,19 @@
     (doseq [handler (.getHandlers logger)]
       (. handler setLevel level))))
 
-(set-log-level! java.util.logging.Level/FINEST)
+#_(set-log-level! java.util.logging.Level/FINEST)
 
 (osc/osc-debug true)
-(defonce *control-client* (osc/osc-client "127.0.0.1" 5432))
+(defonce ^{:dynamic true} *control-client* (osc/osc-client "127.0.0.1" 5432 :send-q (java.util.concurrent.LinkedBlockingQueue.)))
 
-(defonce *query-ctx* (let [result (atom [])
+(defonce ^{:dynamic true} *query-ctx* (let [result (atom [])
+                                            promise-atom (atom nil)
                            result-server (osc/osc-server 3456)]
                        (osc/osc-handle result-server "/clj4l/result/begin" (fn [msg] (reset! result [])))
                        (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args msg))))
-                       {:query-client (osc/osc-client "127.0.0.1" 6543) :result-server result-server :result result }))
+                       (osc/osc-handle result-server "/clj4l/result/end" (fn [msg] (deliver @promise-atom @result)))
+                       {:query-client (osc/osc-client "127.0.0.1" 6543 :send-q (java.util.concurrent.LinkedBlockingQueue.))
+                        :promise-atom promise-atom :result-server result-server :result result}))
 
 (defn- as-osc-msgs [path-prefix msgs]
   (->> msgs
@@ -47,14 +50,17 @@
     (apply osc/osc-send *control-client*  msg)))
 
 (defn query [& msgs]
-  (let [client (:query-client *query-ctx*)]
-    (osc/osc-send client "/clj4l/query/begin")
+  (let [{:keys [query-client promise-atom]} *query-ctx*]
+    (reset! promise-atom (promise))
+    (osc/osc-send query-client "/clj4l/query/begin")
     (doseq [msg (as-osc-msgs "/clj4l/query/" msgs)]
-      (apply osc/osc-send client msg))
-    (osc/osc-send client "/clj4l/query/end")
-    (if (osc/osc-recv (:result-server *query-ctx*) "/clj4l/result/end" 2000)
-      @(:result *query-ctx*)
-      (throw (Exception. "Timed out waiting for query result.")))))
+      (apply osc/osc-send query-client msg))
+    (osc/osc-send query-client "/clj4l/query/end")
+    #_(println "query: osc-recv: " msgs)
+    (let [result (deref @promise-atom 2000 ::timed-out)]
+      (if (= result ::timed-out)
+        (throw (Exception. "Timed out waiting for query result."))
+        result))))
 
 (defn query-props [path & props]
   (->> (apply query path (map #(str "get " (name %1)) props))
@@ -245,6 +251,7 @@
   (query-props "goto live_set tracks 0 clip_slots 0 clip" :length :loop_start :loop_end :looping :name)
 
   (get-notes 0 0)
+  (get-notes 1 0)
   (set-notes 0 0 [{:p 60 :t 0.0 :d 4.0 :v 100}])
   (set-notes 0 0 [{:p 67 :t 2.0 :d 4.0 :v 100}])
 
