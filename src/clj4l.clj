@@ -10,31 +10,31 @@
 
 ; (alter-var-root #'*out* (constantly *out*))
 
-(def ^{:dynamic true} *tracks* nil)
-(def ^{:dynamic true} *scenes* nil)
+(def ^:dynamic *tracks* nil)
+(def ^:dynamic *scenes* nil)
 
-#_(defn set-log-level!
+(defn set-log-level!
   "http://www.paullegato.com/blog/setting-clojure-log-level/"
   [level]
   "Sets the root logger's level, and the level of all of its Handlers, to level."
-  (let [logger (log/impl-get-log "")]
+  (let [logger (.get-logger log/*logger-factory* "")]
     (.setLevel logger level)
     (doseq [handler (.getHandlers logger)]
-      (. handler setLevel level))))
+      (.setLevel handler level))))
 
-#_(set-log-level! java.util.logging.Level/FINEST)
+(set-log-level! java.util.logging.Level/FINEST)
 
 (osc/osc-debug true)
-(defonce ^{:dynamic true} *control-client* (osc/osc-client "127.0.0.1" 5432 :send-q (java.util.concurrent.LinkedBlockingQueue.)))
+(defonce ^:dynamic *control-client* (osc/osc-client "127.0.0.1" 5432 :send-q (java.util.concurrent.LinkedBlockingQueue.)))
 
-(defonce ^{:dynamic true} *query-ctx* (let [result (atom [])
-                                            promise-atom (atom nil)
-                           result-server (osc/osc-server 3456)]
-                       (osc/osc-handle result-server "/clj4l/result/begin" (fn [msg] (reset! result [])))
-                       (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args msg))))
-                       (osc/osc-handle result-server "/clj4l/result/end" (fn [msg] (deliver @promise-atom @result)))
-                       {:query-client (osc/osc-client "127.0.0.1" 6543 :send-q (java.util.concurrent.LinkedBlockingQueue.))
-                        :promise-atom promise-atom :result-server result-server :result result}))
+(defonce ^:dynamic *query-ctx* (let [result (atom [])
+                                     promise-atom (atom nil)
+                                     result-server (osc/osc-server 3456)]
+                                 (osc/osc-handle result-server "/clj4l/result/begin" (fn [msg] (reset! result [])))
+                                 (osc/osc-handle result-server "/clj4l/result" (fn [msg] (swap! result conj (:args msg))))
+                                 (osc/osc-handle result-server "/clj4l/result/end" (fn [msg] (deliver @promise-atom @result)))
+                                 {:query-client (osc/osc-client "127.0.0.1" 6543 :send-q (java.util.concurrent.LinkedBlockingQueue.))
+                                  :promise-atom promise-atom :result-server result-server :result result}))
 
 (defn- as-osc-msgs [path-prefix msgs]
   (->> msgs
@@ -239,6 +239,7 @@
 ; (with-m4l (notate dms-matrix* [:lead-synth] [:intro :intro-1 :intro-2 :intro-3]))
 
 (comment
+  
   (with-m4l
     (def notes* (get-notes :intro-3 :lead-synth)))
   (with-m4l
